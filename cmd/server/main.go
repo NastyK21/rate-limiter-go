@@ -6,10 +6,15 @@ import (
 
 	"github.com/NastyK21/rate-limiter-go/internal/config"
 	"github.com/NastyK21/rate-limiter-go/internal/limiter"
+	"github.com/NastyK21/rate-limiter-go/internal/metrics"
 	"github.com/NastyK21/rate-limiter-go/internal/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
+
+	metrics.Register()
+
 	cfg := config.Load()
 
 	redisClient, err := limiter.NewRedisClient(cfg.RedisAddr, cfg.RedisDB)
@@ -35,6 +40,8 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))

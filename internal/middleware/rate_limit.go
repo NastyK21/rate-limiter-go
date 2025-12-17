@@ -10,6 +10,7 @@ import (
 
 	"github.com/NastyK21/rate-limiter-go/internal/config"
 	"github.com/NastyK21/rate-limiter-go/internal/limiter"
+	"github.com/NastyK21/rate-limiter-go/internal/metrics"
 	"github.com/NastyK21/rate-limiter-go/pkg/response"
 )
 
@@ -19,7 +20,7 @@ type RateLimitConfig struct {
 	FailureStrategy config.FailureStrategy
 	LocalLimiter    *limiter.LocalLimiter
 
-	// Phase 6
+	// Phase 6: per-user limits
 	UserCapacity   float64
 	UserRefillRate float64
 }
@@ -30,7 +31,6 @@ func extractUserID(r *http.Request) (string, bool) {
 		return "", false
 	}
 
-	// Expected: "Bearer <user-id>"
 	const prefix = "Bearer "
 	if !strings.HasPrefix(auth, prefix) {
 		return "", false
@@ -51,6 +51,10 @@ func RateLimit(
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/metrics" {
+				next.ServeHTTP(w, r)
+				return
+			}
 
 			// 1️⃣ Extract client IP
 			ip, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -67,56 +71,71 @@ func RateLimit(
 				key        string
 				capacity   float64
 				refillRate float64
+				identity   string
 			)
 
+			// 3️⃣ Decide identity (user vs ip)
 			if userID, ok := extractUserID(r); ok {
 				key = "user:" + userID
 				capacity = cfg.UserCapacity
 				refillRate = cfg.UserRefillRate
+				identity = "user"
 			} else {
 				key = "ip:" + normalizeIP(ip)
 				capacity = cfg.Capacity
 				refillRate = cfg.RefillRate
+				identity = "ip"
 			}
 
-			// 3️⃣ Rate limit check
+			// 4️⃣ Rate limit check (Redis)
 			allowed, remaining, err := rl.Allow(ctx, key, capacity, refillRate)
 
 			if err != nil {
-				if cfg.FailureStrategy == config.FailOpen {
-					allowed := cfg.LocalLimiter.Allow(key)
+				metrics.RateLimitErrors.Inc()
 
+				if cfg.FailureStrategy == config.FailOpen {
+					metrics.RateLimitDegraded.Inc()
+
+					allowed := cfg.LocalLimiter.Allow(key)
 					w.Header().Set("X-RateLimit-Degraded", "true")
 
 					if !allowed {
+						metrics.RateLimitBlocked.WithLabelValues(identity).Inc()
 						response.WriteError(w, http.StatusTooManyRequests, "rate limit exceeded (degraded)")
 						return
 					}
 
+					metrics.RateLimitAllowed.WithLabelValues(identity).Inc()
 					next.ServeHTTP(w, r)
 					return
 				}
 
+				metrics.RateLimitBlocked.WithLabelValues(identity).Inc()
 				response.WriteError(w, http.StatusTooManyRequests, "rate limiter unavailable")
 				return
 			}
 
-			// 4️⃣ Rate limit headers
+			// 5️⃣ Rate limit headers
 			w.Header().Set("X-RateLimit-Limit", strconv.FormatFloat(capacity, 'f', -1, 64))
 			w.Header().Set("X-RateLimit-Remaining", strconv.FormatFloat(remaining, 'f', -1, 64))
 
-			// 5️⃣ Block if limit exceeded
+			// 6️⃣ Block if limit exceeded
 			if !allowed {
+				metrics.RateLimitBlocked.WithLabelValues(identity).Inc()
 				w.Header().Set("Retry-After", "1")
 				response.WriteError(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return
 			}
 
-			// 6️⃣ Allow request
+			// 7️⃣ Allow request
+			//log.Println("RATE LIMIT ALLOWED:", identity)
+			metrics.RateLimitAllowed.WithLabelValues(identity).Inc()
 			next.ServeHTTP(w, r)
+
 		})
 	}
 }
+
 func normalizeIP(ip string) string {
 	if ip == "::1" {
 		return "127.0.0.1"
