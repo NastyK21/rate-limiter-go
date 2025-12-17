@@ -12,21 +12,26 @@ type RedisClient struct {
 	Client *redis.Client
 }
 
-func NewRedisClient(addr string, db int) (*RedisClient, error) {
-	password := os.Getenv("REDIS_PASSWORD")
+func NewRedisClient(_ string, _ int) (*RedisClient, error) {
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		return nil, redis.ErrClosed
+	}
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr:         addr,
-		Password:     password, // 🔑 REQUIRED for Railway Redis
-		DB:           db,
-		PoolSize:     10,
-		MinIdleConns: 2,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-	})
+	opts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		return nil, err
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	opts.DialTimeout = 5 * time.Second
+	opts.ReadTimeout = 3 * time.Second
+	opts.WriteTimeout = 3 * time.Second
+	opts.PoolSize = 10
+	opts.MinIdleConns = 2
+
+	rdb := redis.NewClient(opts)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
