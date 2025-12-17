@@ -14,17 +14,24 @@ func main() {
 
 	redisClient, err := limiter.NewRedisClient(cfg.RedisAddr, cfg.RedisDB)
 	if err != nil {
-		log.Fatalf("failed to connect to redis: %v", err)
+		log.Printf("redis unavailable, starting in degraded mode: %v", err)
+		redisClient = nil
 	}
 
-	rl, err := limiter.NewRateLimiter(redisClient)
-	if err != nil {
-		log.Fatal(err)
-	}
+	rl := limiter.NewRateLimiter(redisClient)
+	localLimiter := limiter.NewLocalLimiter(5, 1)
 
 	rateLimitCfg := middleware.RateLimitConfig{
+		// IP limits (anonymous)
 		Capacity:   5,
 		RefillRate: 1,
+
+		// User limits (authenticated)
+		UserCapacity:   20,
+		UserRefillRate: 5,
+
+		FailureStrategy: cfg.FailureStrategy,
+		LocalLimiter:    localLimiter,
 	}
 
 	mux := http.NewServeMux()

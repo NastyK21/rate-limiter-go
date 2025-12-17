@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"context"
+	"errors"
 	"os"
 )
 
@@ -10,19 +11,20 @@ type RateLimiter struct {
 	script string
 }
 
-func NewRateLimiter(redis *RedisClient) (*RateLimiter, error) {
-	data, err := os.ReadFile("internal/limiter/lua/token_bucket.lua")
-	if err != nil {
-		return nil, err
-	}
+func NewRateLimiter(redis *RedisClient) *RateLimiter {
+	data, _ := os.ReadFile("internal/limiter/lua/token_bucket.lua")
 
 	return &RateLimiter{
 		redis:  redis,
 		script: string(data),
-	}, nil
+	}
 }
 
 func (r *RateLimiter) Allow(ctx context.Context, key string, capacity, refillRate float64) (bool, float64, error) {
+	if r.redis == nil {
+		return false, 0, errors.New("redis unavailable")
+	}
+
 	now, err := r.redis.Client.Time(ctx).Result()
 	if err != nil {
 		return false, 0, err
