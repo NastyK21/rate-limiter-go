@@ -2,6 +2,7 @@ package limiter
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -12,8 +13,11 @@ type RedisClient struct {
 }
 
 func NewRedisClient(addr string, db int) (*RedisClient, error) {
+	password := os.Getenv("REDIS_PASSWORD")
+
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         addr,
+		Password:     password, // 🔑 REQUIRED for Railway Redis
 		DB:           db,
 		PoolSize:     10,
 		MinIdleConns: 2,
