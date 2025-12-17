@@ -1,12 +1,12 @@
 package main
 
 import (
-	"context"
 	"log"
 	"net/http"
 
 	"github.com/NastyK21/rate-limiter-go/internal/config"
 	"github.com/NastyK21/rate-limiter-go/internal/limiter"
+	"github.com/NastyK21/rate-limiter-go/internal/middleware"
 )
 
 func main() {
@@ -17,24 +17,15 @@ func main() {
 		log.Fatalf("failed to connect to redis: %v", err)
 	}
 
-	// -------- Phase 3: TEMP limiter test --------
 	rl, err := limiter.NewRateLimiter(redisClient)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	allowed, remaining, err := rl.Allow(
-		context.Background(),
-		"test-user",
-		5, // capacity
-		1, // refill rate (tokens/sec)
-	)
-	if err != nil {
-		log.Fatal(err)
+	rateLimitCfg := middleware.RateLimitConfig{
+		Capacity:   5,
+		RefillRate: 1,
 	}
-
-	log.Println("allowed:", allowed, "remaining:", remaining)
-	// -------- END TEMP test --------
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -42,9 +33,11 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
+	handler := middleware.RateLimit(rl, rateLimitCfg)(mux)
+
 	server := &http.Server{
 		Addr:    cfg.ServerPort,
-		Handler: mux,
+		Handler: handler,
 	}
 
 	log.Println("server started on", cfg.ServerPort)
